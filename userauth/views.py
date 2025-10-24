@@ -12,8 +12,147 @@ import logging
 from django.shortcuts import get_object_or_404
 from .serializers import *
 from rest_framework import generics
+from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+class RegisterView(APIView):
+    """
+    Handles user registration with name, email, and password.
+    Returns JWT access and refresh tokens upon successful registration.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        name = request.data.get("name")
+        email = request.data.get("email")
+        password = request.data.get("password")
+
+        # --- Input validation ---
+        if not all([name, email, password]):
+            return Response(
+                {"error": "Name, email, and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if User.objects.filter(email=email).exists():
+            return Response(
+                {"error": "A user with this email already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Password validation ---
+        try:
+            validate_password(password)
+        except ValidationError as e:
+            return Response(
+                {"error": e.messages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            # --- Create user and profile ---
+            user = User.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+                first_name=name,
+            )
+
+            profile = Profile.objects.create(user=user)
+
+            # --- Generate JWT tokens ---
+            refresh = RefreshToken.for_user(user)
+            access = refresh.access_token
+
+            logger.info(f"New user registered: {email}")
+
+            return Response(
+                {
+                    "message": "User registered successfully.",
+                    "access_token": str(access),
+                    "refresh_token": str(refresh),
+                    "user": {
+                        "email": user.email,
+                        "name": user.first_name,
+                        "xp": profile.xp,
+                        "coins": profile.coins,
+                        "level": profile.level,
+                        "avatar": profile.avatar,
+                    },
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            logger.exception("Registration failed")
+            return Response(
+                {"error": "An unexpected error occurred during registration."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class EmailLoginView(APIView):
+    """
+    Handles login with email and password.
+    Returns JWT access and refresh tokens upon successful authentication.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
+
+        # --- Input validation ---
+        if not all([email, password]):
+            return Response(
+                {"error": "Email and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = authenticate(username=email, password=password)
+        if user is None:
+            logger.warning(f"Failed login attempt for {email}")
+            return Response(
+                {"error": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            # --- Generate JWT tokens ---
+            refresh = RefreshToken.for_user(user)
+            access = refresh.access_token
+
+            profile, _ = Profile.objects.get_or_create(user=user)
+
+            logger.info(f"User logged in: {email}")
+
+            return Response(
+                {
+                    "message": "Login successful.",
+                    "access_token": str(access),
+                    "refresh_token": str(refresh),
+                    "user": {
+                        "email": user.email,
+                        "name": user.first_name,
+                        "xp": profile.xp,
+                        "coins": profile.coins,
+                        "level": profile.level,
+                        "avatar": profile.avatar,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            logger.exception("Login failed")
+            return Response(
+                {"error": "An unexpected error occurred during login."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
