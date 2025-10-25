@@ -15,6 +15,14 @@ from rest_framework import generics
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.mail import send_mail, EmailMessage
+from django.template.loader import render_to_string
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +71,7 @@ class RegisterView(APIView):
             )
 
             profile = Profile.objects.create(user=user)
+            send_welcome_email(user)
 
             # --- Generate JWT tokens ---
             refresh = RefreshToken.for_user(user)
@@ -94,7 +103,6 @@ class RegisterView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-
 class EmailLoginView(APIView):
     """
     Handles login with email and password.
@@ -113,6 +121,15 @@ class EmailLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # --- Check if user exists but has no usable password (Google login) ---
+        user_obj = User.objects.filter(email=email).first()
+        if user_obj and not user_obj.has_usable_password():
+            return Response(
+                {"error": "This account was created using Google. Please log in with Google Sign-In."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Authenticate user normally ---
         user = authenticate(username=email, password=password)
         if user is None:
             logger.warning(f"Failed login attempt for {email}")
@@ -153,6 +170,16 @@ class EmailLoginView(APIView):
                 {"error": "An unexpected error occurred during login."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+def send_welcome_email(user):
+    """Send HTML welcome email after signup."""
+    subject = "🎉 Welcome to CodeLearn!"
+    html_message = render_to_string("emails/welcome_email.html", {"user": user})
+    email = EmailMessage(subject, html_message, settings.DEFAULT_FROM_EMAIL, [user.email])
+    email.content_subtype = "html"
+    email.send(fail_silently=True)
+
 
 class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
@@ -307,165 +334,85 @@ class TokenRefreshView(APIView):
         except Exception as e:
             logger.exception("Unexpected error during token refresh")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-class TopicListView(APIView):
-    """List topics for a specific level."""
-    permission_classes = [AllowAny]
+ 
 
-    def get(self, request, level_number):
-        level = get_object_or_404(Level, number=level_number)
-        topics = level.topics.order_by('order').values('id', 'title', 'explanation', 'video_url', 'order')
-        return Response({"level": level.title, "topics": list(topics)})
-
-
-class SubmitAnswersView(APIView):
-    """Submit quiz answers and award XP + coins only once per topic."""
-    permission_classes = [IsAuthenticated]  # Only logged-in users can submit
-
-    def post(self, request, topic_id):
-        user = request.user
-        profile = user.profile
-        topic = get_object_or_404(Topic, id=topic_id)
-        answers = request.data.get("answers", {})  # {"question_id": "answer"}
-
-        questions = topic.questions.all()
-        correct_count = 0
-
-        for q in questions:
-            user_answer = str(answers.get(str(q.id), "")).strip().lower()
-            correct = str(q.correct_answer).strip().lower()
-            if user_answer == correct:
-                correct_count += 1
-
-        progress, created = UserProgress.objects.get_or_create(user=user, topic=topic)
-        progress.correct_answers = correct_count
-        progress.total_questions = questions.count()
-
-        if correct_count == questions.count():
-            if not progress.completed:
-                # First-time completion: award XP & coins
-                progress.mark_completed()
-                profile.add_xp(10)
-                profile.coins += 5
-
-                # Level up after every 5 completed topics
-                total_completed = UserProgress.objects.filter(user=user, completed=True).count()
-                if total_completed % 5 == 0:
-                    profile.level += 1
-
-                profile.save()
-
-                return Response({
-                    "message": "✅ All answers correct! Topic completed. XP & coins awarded.",
-                    "xp": profile.xp,
-                    "coins": profile.coins,
-                    "level": profile.level
-                }, status=status.HTTP_200_OK)
-            else:
-                # Already completed before
-                return Response({
-                    "message": "✅ All answers correct! Topic was already completed. XP & coins already awarded."
-                }, status=status.HTTP_200_OK)
-
-        else:
-            progress.save()
-            return Response({
-                "message": f"❌ You got {correct_count}/{questions.count()} correct. Try again!"
-            }, status=status.HTTP_200_OK)
-
-        
-# -----------------------------
-# 1️⃣ List all levels
-# -----------------------------
-class LevelListView(APIView):
-    permission_classes = [AllowAny]
-
-    def get(self, request):
-        levels = Level.objects.all().order_by('number')
-        serializer = LevelSerializer(levels, many=True)
-        return Response(serializer.data)
-
-
-# -----------------------------
-# 2️⃣ List all topics under a level
-# -----------------------------
-class TopicListView(APIView):
-    permission_classes = [AllowAny]
-
-    def get(self, request, level_id):
-        level = get_object_or_404(Level, id=level_id)
-        topics = level.topics.order_by('order')
-        serializer = TopicSerializer(topics, many=True)
-        return Response({
-            "level_id": level.id,
-            "level_number": level.number,
-            "level_title": level.title,
-            "topics": serializer.data
-        })
-
-
-# -----------------------------
-# 3️⃣ List all questions under a topic
-# -----------------------------
-class QuestionListView(APIView):
-    permission_classes = [AllowAny]
-
-    def get(self, request, topic_id):
-        topic = get_object_or_404(Topic, id=topic_id)
-        questions = topic.questions.all()
-        serializer = QuestionSerializer(questions, many=True)
-        return Response({
-            "topic_id": topic.id,
-            "topic_title": topic.title,
-            "questions": serializer.data
-        })
-    
-class CodingTopicListView(APIView):
-    """
-    Get all coding topics
-    """
-    def get(self, request):
-        topics = CodingTopic.objects.all().order_by('name')  # Order alphabetically
-        serializer = CodingTopicSerializer(topics, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-
-# List problems under a specific topic
-class CodingProblemListAPIView(generics.ListAPIView):
-    serializer_class = CodingProblemListSerializer
-
-    def get_queryset(self):
-        topic_id = self.kwargs['topic_id']
-        return CodingProblem.objects.filter(topic__id=topic_id).order_by('sno')
-
-# Detailed view of a single problem
-class CodingProblemDetailAPIView(generics.RetrieveAPIView):
-    queryset = CodingProblem.objects.all()
-    serializer_class = CodingProblemDetailSerializer
-
-class UserProgressView(APIView):
-    """
-    Get all topics' progress for the authenticated user.
-    """
+class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    def post(self, request):
         user = request.user
-        progress_qs = UserProgress.objects.filter(user=user).select_related("topic", "topic__level")
-        
-        data = [
-            {
-                "level_id": p.topic.level.id,
-                "level_number": p.topic.level.number,
-                "level_title": p.topic.level.title,
-                "topic_id": p.topic.id,
-                "topic_title": p.topic.title,
-                "completed": p.completed,
-                "correct_answers": p.correct_answers,
-                "total_questions": p.total_questions,
-                "date_completed": p.date_completed,
-            }
-            for p in progress_qs
-        ]
+        old_password = request.data.get("old_password")
+        new_password = request.data.get("new_password")
 
-        return Response({"user": user.username, "progress": data}, status=status.HTTP_200_OK)
+        if not all([old_password, new_password]):
+            return Response({"error": "Old and new password are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(old_password):
+            return Response({"error": "Old password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_password(new_password)
+        except ValidationError as e:
+            return Response({"error": e.messages}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        return Response({"message": "Password changed successfully."}, status=status.HTTP_200_OK)
+
+
+# -----------------------------
+# Forgot Password (Request Reset)
+# -----------------------------
+class ForgotPasswordView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        if not email:
+            return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        form = PasswordResetForm(data={"email": email})
+        if form.is_valid():
+            # Send reset email
+            form.save(
+                subject_template_name="emails/password_reset_subject.txt",
+                email_template_name="emails/password_reset_email.html",
+                use_https=request.is_secure(),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                request=request,
+                html_email_template_name="emails/password_reset_email.html"
+            )
+            return Response({"message": "Password reset email sent if the email exists."}, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "Invalid email."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# -----------------------------
+# Reset Password (Confirm via Token)
+# -----------------------------
+class ResetPasswordConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, uidb64, token):
+        new_password = request.data.get("new_password")
+        if not new_password:
+            return Response({"error": "New password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({"error": "Invalid reset link."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({"error": "Invalid or expired token."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_password(new_password)
+        except ValidationError as e:
+            return Response({"error": e.messages}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+        return Response({"message": "Password reset successfully."}, status=status.HTTP_200_OK)

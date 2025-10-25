@@ -22,5 +22,7 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('userauth.urls')),  # Include URLs from userauth app
+    path("ckeditor5/", include('django_ckeditor_5.urls')),
+    path('jobs/',include("jobs.urls"))
 ] + static(settings.STATIC_URL,document_root=settings.STATIC_ROOT)
 

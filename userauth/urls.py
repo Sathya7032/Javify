@@ -9,21 +9,11 @@ urlpatterns = [
     path('profile/', ProfileView.as_view(), name='profile'),  # User profile
     path('auth/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path("auth/logout/", LogoutView.as_view(), name="logout"),
-    path('levels/<int:level_number>/topic/', TopicListView.as_view(), name='topics-list'),
-    path('topics/<int:topic_id>/submit/', SubmitAnswersView.as_view(), name='submit-answers'),
+   
+    path("", include("tutorials.urls")),
 
-
-    path('levels/', LevelListView.as_view(), name='level-list'),
-    path('levels/<int:level_id>/topics/', TopicListView.as_view(), name='topic-list'),
-    path('topics/<int:topic_id>/questions/', QuestionListView.as_view(), name='question-list'),
-
-    path('topics/', CodingTopicListView.as_view(), name='coding-topic-list'),
-    # List problems under a topic
-    path('topics/<int:topic_id>/problems/', CodingProblemListAPIView.as_view(), name='problem-list'),
-
-    # Detail of a specific problem
-    path('problems/<int:pk>/', CodingProblemDetailAPIView.as_view(), name='problem-detail'),
-
-    path("user/progress/", UserProgressView.as_view(), name="user-progress"),
+     path('auth/change-password/', ChangePasswordView.as_view(), name='change-password'),
+    path('forgot-password/', ForgotPasswordView.as_view(), name='forgot-password'),
+    path('reset-password/<uidb64>/<token>/', ResetPasswordConfirmView.as_view(), name='reset-password-confirm'),
     
 ]
