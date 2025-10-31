@@ -1,109 +1,51 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-from django.contrib.auth.models import User
+from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework_simplejwt.tokens import RefreshToken, TokenError
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
-from .models import *
-import logging
 from django.shortcuts import get_object_or_404
-from .serializers import *
-from rest_framework import generics
-from django.contrib.auth import authenticate
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
-from django.core.mail import send_mail, EmailMessage
-from django.template.loader import render_to_string
-from django.conf import settings
-
-       
-class TopicListView(APIView):
-    """List topics for a specific level."""
-    permission_classes = [AllowAny]
-
-    def get(self, request, level_number):
-        level = get_object_or_404(Level, number=level_number)
-        topics = level.topics.order_by('order').values('id', 'title', 'explanation', 'video_url', 'order')
-        return Response({"level": level.title, "topics": list(topics)})
+from .models import (
+    Level,
+    Topic,
+    UserProgress,
+    UserLevelCompletion,
+    CodingTopic,
+    CodingProblem,
+)
+from .serializers import (
+    LevelSerializer,
+    TopicSerializer,
+    QuestionSerializer,
+    CodingTopicSerializer,
+    CodingProblemListSerializer,
+    CodingProblemDetailSerializer,
+)
 
 
-class SubmitAnswersView(APIView):
-    """Submit quiz answers and award XP + coins only once per topic."""
-    permission_classes = [IsAuthenticated]  # Only logged-in users can submit
-
-    def post(self, request, topic_id):
-        user = request.user
-        profile = user.profile
-        topic = get_object_or_404(Topic, id=topic_id)
-        answers = request.data.get("answers", {})  # {"question_id": "answer"}
-
-        questions = topic.questions.all()
-        correct_count = 0
-
-        for q in questions:
-            user_answer = str(answers.get(str(q.id), "")).strip().lower()
-            correct = str(q.correct_answer).strip().lower()
-            if user_answer == correct:
-                correct_count += 1
-
-        progress, created = UserProgress.objects.get_or_create(user=user, topic=topic)
-        progress.correct_answers = correct_count
-        progress.total_questions = questions.count()
-
-        if correct_count == questions.count():
-            if not progress.completed:
-                # First-time completion: award XP & coins
-                progress.mark_completed()
-                profile.add_xp(10)
-                profile.coins += 5
-
-                # Level up after every 5 completed topics
-                total_completed = UserProgress.objects.filter(user=user, completed=True).count()
-                if total_completed % 5 == 0:
-                    profile.level += 1
-
-                profile.save()
-
-                return Response({
-                    "message": "✅ All answers correct! Topic completed. XP & coins awarded.",
-                    "xp": profile.xp,
-                    "coins": profile.coins,
-                    "level": profile.level
-                }, status=status.HTTP_200_OK)
-            else:
-                # Already completed before
-                return Response({
-                    "message": "✅ All answers correct! Topic was already completed. XP & coins already awarded."
-                }, status=status.HTTP_200_OK)
-
-        else:
-            progress.save()
-            return Response({
-                "message": f"❌ You got {correct_count}/{questions.count()} correct. Try again!"
-            }, status=status.HTTP_200_OK)
-
-        
 # -----------------------------
-# 1️⃣ List all levels
+# 1️⃣ List all Levels
 # -----------------------------
 class LevelListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        """
+        Get all available levels with their XP/coin rewards.
+        """
         levels = Level.objects.all().order_by('number')
         serializer = LevelSerializer(levels, many=True)
-        return Response(serializer.data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # -----------------------------
-# 2️⃣ List all topics under a level
+# 2️⃣ List all Topics under a Level
 # -----------------------------
 class TopicListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, level_id):
+        """
+        Get all topics that belong to a specific level.
+        """
         level = get_object_or_404(Level, id=level_id)
         topics = level.topics.order_by('order')
         serializer = TopicSerializer(topics, many=True)
@@ -111,17 +53,21 @@ class TopicListView(APIView):
             "level_id": level.id,
             "level_number": level.number,
             "level_title": level.title,
+            "required_topics": level.required_topics,
             "topics": serializer.data
-        })
+        }, status=status.HTTP_200_OK)
 
 
 # -----------------------------
-# 3️⃣ List all questions under a topic
+# 3️⃣ List all Questions under a Topic
 # -----------------------------
 class QuestionListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, topic_id):
+        """
+        Get all questions for a specific topic.
+        """
         topic = get_object_or_404(Topic, id=topic_id)
         questions = topic.questions.all()
         serializer = QuestionSerializer(questions, many=True)
@@ -129,43 +75,129 @@ class QuestionListView(APIView):
             "topic_id": topic.id,
             "topic_title": topic.title,
             "questions": serializer.data
-        })
-    
+        }, status=status.HTTP_200_OK)
+
+
+# -----------------------------
+# 4️⃣ Coding Topics and Problems
+# -----------------------------
 class CodingTopicListView(APIView):
     """
-    Get all coding topics
+    Get all coding topics.
     """
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        topics = CodingTopic.objects.all().order_by('name')  # Order alphabetically
+        topics = CodingTopic.objects.all().order_by('name')
         serializer = CodingTopicSerializer(topics, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
 
-# List problems under a specific topic
+
 class CodingProblemListAPIView(generics.ListAPIView):
+    """
+    List all coding problems under a specific topic.
+    """
     serializer_class = CodingProblemListSerializer
 
     def get_queryset(self):
         topic_id = self.kwargs['topic_id']
         return CodingProblem.objects.filter(topic__id=topic_id).order_by('sno')
 
-# Detailed view of a single problem
+
 class CodingProblemDetailAPIView(generics.RetrieveAPIView):
+    """
+    Retrieve details for a single coding problem.
+    """
     queryset = CodingProblem.objects.all()
     serializer_class = CodingProblemDetailSerializer
 
 
+# -----------------------------
+# 5️⃣ Submit Answers + Rewards
+# -----------------------------
+class SubmitAnswersView(APIView):
+    """
+    Submit quiz answers for a topic, update progress, 
+    and reward XP + coins for topics and levels.
+    """
+    permission_classes = [IsAuthenticated]
 
+    def post(self, request, topic_id):
+        user = request.user
+        profile = user.profile  # Must exist in UserProfile model
+        topic = get_object_or_404(Topic, id=topic_id)
+        level = topic.level
+        answers = request.data.get("answers", {})
+
+        questions = topic.questions.all()
+        correct_count = 0
+
+        # ✅ Check answers
+        for q in questions:
+            user_answer = str(answers.get(str(q.id), "")).strip().lower()
+            correct = str(q.correct_answer).strip().lower()
+            if user_answer == correct:
+                correct_count += 1
+
+        progress, _ = UserProgress.objects.get_or_create(user=user, topic=topic)
+        progress.correct_answers = correct_count
+        progress.total_questions = questions.count()
+
+        # ✅ All answers correct
+        if correct_count == questions.count():
+            if not progress.completed:
+                progress.mark_completed()
+                profile.add_xp(10)  # Topic XP
+                profile.coins += 5  # Topic coins
+
+                # ✅ Check if level completed
+                if level.is_completed_by(user):
+                    if not UserLevelCompletion.objects.filter(user=user, level=level).exists():
+                        UserLevelCompletion.objects.create(user=user, level=level)
+                        profile.add_xp(level.xp_reward)
+                        profile.coins += level.coin_reward
+
+                        # 🔓 Unlock next level
+                        next_level = Level.objects.filter(number=level.number + 1).first()
+                        if next_level:
+                            profile.unlocked_level = next_level.number
+                            profile.save()
+
+                profile.save()
+
+                return Response({
+                    "message": f"✅ Topic '{topic.title}' completed successfully!",
+                    "xp": profile.xp,
+                    "coins": profile.coins,
+                    "unlocked_level": getattr(profile, "unlocked_level", None),
+                }, status=status.HTTP_200_OK)
+
+            else:
+                return Response({
+                    "message": "✅ Topic already completed earlier."
+                }, status=status.HTTP_200_OK)
+
+        # ❌ Some answers incorrect
+        else:
+            progress.save()
+            return Response({
+                "message": f"❌ You got {correct_count}/{questions.count()} correct. Try again!"
+            }, status=status.HTTP_200_OK)
+
+
+# -----------------------------
+# 6️⃣ User Progress (All Topics)
+# -----------------------------
 class UserProgressView(APIView):
     """
-    Get all topics' progress for the authenticated user.
+    Get topic-wise progress for authenticated user.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
         progress_qs = UserProgress.objects.filter(user=user).select_related("topic", "topic__level")
-        
+
         data = [
             {
                 "level_id": p.topic.level.id,
@@ -181,4 +213,65 @@ class UserProgressView(APIView):
             for p in progress_qs
         ]
 
-        return Response({"user": user.username, "progress": data}, status=status.HTTP_200_OK)
+        return Response({
+            "user": user.username,
+            "progress": data
+        }, status=status.HTTP_200_OK)
+
+# -----------------------------
+# 7️⃣ User Level Progress View
+# -----------------------------
+class UserLevelProgressView(APIView):
+    """
+    Get completion status for each level.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        profile = user.profile
+        levels = Level.objects.all().order_by('number')
+        data = []
+
+        # Get user's current unlocked level from profile
+        current_unlocked_level = getattr(profile, "unlocked_level", 1)
+        
+        for level in levels:
+            completed = level.is_completed_by(user)
+            
+            # ✅ FIX: Level is unlocked if:
+            # 1. It's the first level (level 1 is always unlocked)
+            # 2. User's unlocked_level is >= current level number
+            # 3. OR if the previous level is completed
+            unlocked = (
+                level.number == 1 or 
+                current_unlocked_level >= level.number or
+                self.is_previous_level_completed(user, level)
+            )
+            
+            data.append({
+                "level_id": level.id,
+                "level_number": level.number,
+                "level_title": level.title,
+                "xp_reward": level.xp_reward,
+                "coin_reward": level.coin_reward,
+                "required_topics": level.required_topics,
+                "completed": completed,
+                "unlocked": unlocked
+            })
+
+        return Response({
+            "user": user.username,
+            "levels": data
+        }, status=status.HTTP_200_OK)
+
+    def is_previous_level_completed(self, user, current_level):
+        """Check if the previous level is completed"""
+        if current_level.number == 1:
+            return True  # First level has no previous level
+            
+        try:
+            previous_level = Level.objects.get(number=current_level.number - 1)
+            return previous_level.is_completed_by(user)
+        except Level.DoesNotExist:
+            return False

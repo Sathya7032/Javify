@@ -29,7 +29,7 @@ class LevelSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Level
-        fields = ['id', 'number', 'title', 'description', 'topics_count']
+        fields = ['id', 'number', 'title', 'description', 'topics_count','xp_reward','coin_reward']
 
 class CodingTopicSerializer(serializers.ModelSerializer):
     class Meta:

@@ -4,24 +4,22 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework_simplejwt.tokens import RefreshToken, TokenError
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError, AccessToken
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from .models import *
 import logging
-from django.shortcuts import get_object_or_404
 from .serializers import *
-from rest_framework import generics
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail, EmailMessage
+from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
-from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
-from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
-from django.utils.encoding import force_bytes, force_str
+from django.contrib.auth.forms import PasswordResetForm
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
 
 
 logger = logging.getLogger(__name__)
@@ -254,53 +252,64 @@ class ProfileView(APIView):
             "avatar": profile.avatar,
         }
         return Response(data, status=200)
-    
+
 class LogoutView(APIView):
     """
-    Log out user by blacklisting their refresh token (if blacklist app is enabled).
+    Log out user by blacklisting both refresh and access tokens (if blacklist is enabled).
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
             refresh_token = request.data.get("refresh_token")
- 
+            access_token = request.data.get("access_token")
 
-            if not refresh_token:
-               
+            if not refresh_token and not access_token:
                 return Response(
-                    {"error": "Refresh token is required"},
+                    {"error": "Both refresh and access tokens are required."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            token = RefreshToken(refresh_token)
-          
-            # Try to blacklist only if blacklist app is enabled
-            try:
-                token.blacklist()
-                message = "Successfully logged out and token blacklisted."
-               
-            except AttributeError:
-                # Blacklist not configured
-                message = "Logout successful (blacklist not enabled)."
+            messages = []
 
-            return Response({"message": message}, status=status.HTTP_200_OK)
+            # Blacklist refresh token
+            if refresh_token:
+                try:
+                    refresh = RefreshToken(refresh_token)
+                    try:
+                        refresh.blacklist()
+                        messages.append("Refresh token blacklisted.")
+                    except AttributeError:
+                        messages.append("Refresh token logout successful (blacklist not enabled).")
+                except TokenError:
+                    messages.append("Invalid or expired refresh token.")
 
-        except TokenError:
-            return Response(
-                {"error": "Invalid or expired refresh token"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # Blacklist access token
+            if access_token:
+                try:
+                    access = AccessToken(access_token)
+                    try:
+                        access.blacklist()
+                        messages.append("Access token blacklisted.")
+                    except AttributeError:
+                        messages.append("Access token logout successful (blacklist not enabled).")
+                except TokenError:
+                    messages.append("Invalid or expired access token.")
+
+            return Response({"messages": messages}, status=status.HTTP_200_OK)
+
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class TokenRefreshView(APIView):
     """
     Takes a refresh token and returns a new access token (and optionally a new refresh token).
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         refresh_token = request.data.get("refresh_token")

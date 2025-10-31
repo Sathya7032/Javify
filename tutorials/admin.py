@@ -1,40 +1,76 @@
 from django.contrib import admin
 from .models import *
-# Register your models here.
 
-# --- Inline for Topics under Level ---
+# ---------------------------------
+# 🔹 INLINE: Topics under Level
+# ---------------------------------
 class TopicInline(admin.TabularInline):
     model = Topic
     extra = 1
     fields = ('title', 'order', 'video_url')
+    ordering = ('order',)
 
-# --- Level Admin ---
+
+# ---------------------------------
+# 🔹 LEVEL ADMIN
+# ---------------------------------
 @admin.register(Level)
 class LevelAdmin(admin.ModelAdmin):
-    list_display = ('number', 'title', 'description')
-    inlines = [TopicInline]
+    list_display = ('number', 'title', 'num_topics', 'xp_reward', 'coin_reward', 'required_topics')
+    list_editable = ('xp_reward', 'coin_reward', 'required_topics')
     search_fields = ('title',)
     ordering = ('number',)
+    inlines = [TopicInline]
+
+    fieldsets = (
+        (None, {
+            'fields': ('number', 'title', 'description')
+        }),
+        ('Rewards & Requirements', {
+            'fields': ('xp_reward', 'coin_reward', 'required_topics'),
+            'classes': ('collapse',),
+        }),
+    )
+
+    # ✅ Add this method
+    def num_topics(self, obj):
+        """Return how many topics belong to this level."""
+        return obj.topics.count()
+
+    num_topics.short_description = "Topics"
 
 
-# --- Inline for Questions under Topic ---
+# ---------------------------------
+# 🔹 INLINE: Questions under Topic
+# ---------------------------------
 class QuestionInline(admin.TabularInline):
     model = Question
     extra = 1
     fields = ('question_text', 'question_type', 'options', 'correct_answer')
+    ordering = ('id',)
 
 
-# --- Topic Admin ---
+# ---------------------------------
+# 🔹 TOPIC ADMIN
+# ---------------------------------
 @admin.register(Topic)
 class TopicAdmin(admin.ModelAdmin):
     list_display = ('title', 'level', 'order')
     list_filter = ('level',)
     search_fields = ('title', 'explanation')
-    inlines = [QuestionInline]
     ordering = ('level__number', 'order')
+    inlines = [QuestionInline]
+
+    fieldsets = (
+        (None, {
+            'fields': ('level', 'title', 'explanation', 'video_url', 'order')
+        }),
+    )
 
 
-# --- Question Admin ---
+# ---------------------------------
+# 🔹 QUESTION ADMIN
+# ---------------------------------
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
     list_display = ('question_text', 'topic', 'question_type')
@@ -43,15 +79,33 @@ class QuestionAdmin(admin.ModelAdmin):
     ordering = ('topic__order',)
 
 
-# --- UserProgress Admin ---
+# ---------------------------------
+# 🔹 USER PROGRESS ADMIN
+# ---------------------------------
 @admin.register(UserProgress)
 class UserProgressAdmin(admin.ModelAdmin):
     list_display = ('user', 'topic', 'completed', 'correct_answers', 'total_questions', 'date_completed')
     list_filter = ('completed', 'topic__level')
     search_fields = ('user__username', 'topic__title')
     ordering = ('-date_completed',)
+    readonly_fields = ('date_completed',)
 
-# --- Inline for problems inside topic admin (optional) ---
+
+# ---------------------------------
+# 🔹 USER LEVEL COMPLETION ADMIN
+# ---------------------------------
+@admin.register(UserLevelCompletion)
+class UserLevelCompletionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'level', 'date_completed')
+    list_filter = ('level',)
+    search_fields = ('user__username', 'level__title')
+    ordering = ('-date_completed',)
+    readonly_fields = ('date_completed',)
+
+
+# ---------------------------------
+# 💻 CODING SECTION ADMIN
+# ---------------------------------
 class CodingProblemInline(admin.TabularInline):
     model = CodingProblem
     extra = 0
@@ -60,27 +114,29 @@ class CodingProblemInline(admin.TabularInline):
     ordering = ('sno',)
     show_change_link = True
 
-# --- Topic Admin ---
+
 @admin.register(CodingTopic)
 class CodingTopicAdmin(admin.ModelAdmin):
     list_display = ('name', 'created_at')
     search_fields = ('name',)
     ordering = ('name',)
     inlines = [CodingProblemInline]
+    readonly_fields = ('created_at',)
 
-# --- Problem Admin ---
+
 @admin.register(CodingProblem)
 class CodingProblemAdmin(admin.ModelAdmin):
     list_display = ('title', 'topic', 'sno', 'created_at')
     list_filter = ('topic',)
-    search_fields = ('title', 'description', 'code_snippet')
+    search_fields = ('title', 'explanation', 'code_snippet')
     ordering = ('topic', 'sno')
     readonly_fields = ('created_at',)
     fieldsets = (
         (None, {
-            'fields': ('topic', 'sno', 'title', 'description', 'code_snippet', 'video_url')
+            'fields': ('topic', 'sno', 'title', 'explanation', 'code_snippet', 'video_url')
         }),
         ('Timestamps', {
             'fields': ('created_at',),
+            'classes': ('collapse',),
         }),
     )
