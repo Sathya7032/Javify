@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import *
-
+from django_ckeditor_5.widgets import CKEditor5Widget
 # ---------------------------------
 # 🔹 INLINE: Topics under Level
 # ---------------------------------
@@ -67,6 +67,10 @@ class TopicAdmin(admin.ModelAdmin):
         }),
     )
 
+    # Replace the 'explanation' field with CKEditor widget
+    formfield_overrides = {
+        models.TextField: {'widget': CKEditor5Widget(config_name='extends')}
+    }
 
 # ---------------------------------
 # 🔹 QUESTION ADMIN
@@ -123,7 +127,7 @@ class CodingTopicAdmin(admin.ModelAdmin):
     inlines = [CodingProblemInline]
     readonly_fields = ('created_at',)
 
-
+# --- CODING PROBLEM ADMIN ---
 @admin.register(CodingProblem)
 class CodingProblemAdmin(admin.ModelAdmin):
     list_display = ('title', 'topic', 'sno', 'created_at')
@@ -131,6 +135,7 @@ class CodingProblemAdmin(admin.ModelAdmin):
     search_fields = ('title', 'explanation', 'code_snippet')
     ordering = ('topic', 'sno')
     readonly_fields = ('created_at',)
+
     fieldsets = (
         (None, {
             'fields': ('topic', 'sno', 'title', 'explanation', 'code_snippet', 'video_url')
@@ -140,3 +145,8 @@ class CodingProblemAdmin(admin.ModelAdmin):
             'classes': ('collapse',),
         }),
     )
+
+    # Replace the 'explanation' field with CKEditor widget
+    formfield_overrides = {
+        models.TextField: {'widget': CKEditor5Widget(config_name='extends')}
+    }
