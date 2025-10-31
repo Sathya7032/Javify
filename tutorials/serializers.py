@@ -48,4 +48,4 @@ class CodingProblemDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CodingProblem
-        fields = ['id', 'topic', 'sno', 'title', 'description', 'code_snippet', 'video_url', 'created_at']
+        fields = ['id', 'topic', 'sno', 'title', 'explanation', 'code_snippet', 'video_url', 'created_at']
